@@ -10,9 +10,11 @@ function App() {
   const [recordingError, setRecordingError] = useState('');
   const [isValidKey, setIsValidKey] = useState(false);
   const [keyValidationStatus, setKeyValidationStatus] = useState('');
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState('');
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const audioBlobRef = useRef(null);
 
   // Função para validar API Key
   const validateApiKey = async (key) => {
@@ -113,41 +115,109 @@ function App() {
   const startRecording = async () => {
     try {
       setRecordingError('');
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Verificar se o navegador suporta gravação
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Seu navegador não suporta gravação de áudio');
+      }
+
+      // Solicitar permissão para usar o microfone
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 44100
+        }
+      });
+
+      // Detectar o melhor formato de áudio suportado
+      let mimeType = 'audio/webm';
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+        mimeType = 'audio/ogg;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/wav')) {
+        mimeType = 'audio/wav';
+      }
+
+      console.log('Usando formato de áudio:', mimeType);
 
       const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm'
+        mimeType: mimeType
       });
 
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
+        if (event.data && event.data.size > 0) {
           audioChunksRef.current.push(event.data);
+          console.log('Chunk de áudio recebido:', event.data.size, 'bytes');
         }
       };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        console.log('Gravação parada, total de chunks:', audioChunksRef.current.length);
+
+        if (audioChunksRef.current.length === 0) {
+          setRecordingError('Nenhum áudio foi gravado');
+          return;
+        }
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        console.log('Blob de áudio criado:', audioBlob.size, 'bytes');
+
+        // Salvar blob para uso posterior
+        audioBlobRef.current = audioBlob;
+
+        // Criar URL para preview do áudio
+        const audioUrl = URL.createObjectURL(audioBlob);
+        setAudioPreviewUrl(audioUrl);
+
+        // Transcrever o áudio
         await transcribeAudio(audioBlob);
 
         // Limpar stream
         stream.getTracks().forEach(track => track.stop());
       };
 
-      mediaRecorder.start();
+      mediaRecorder.onerror = (event) => {
+        console.error('Erro no MediaRecorder:', event);
+        setRecordingError(`Erro durante a gravação: ${event.error?.message || 'Erro desconhecido'}`);
+        setIsRecording(false);
+      };
+
+      // Iniciar gravação com intervalo de tempo para capturar chunks
+      mediaRecorder.start(1000); // Capturar dados a cada 1 segundo
       setIsRecording(true);
+      console.log('Gravação iniciada');
     } catch (error) {
       setRecordingError(`Erro ao acessar microfone: ${error.message}`);
       console.error('Erro ao iniciar gravação:', error);
+
+      // Mensagem mais específica para erro de permissão
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        setRecordingError('Permissão para usar o microfone foi negada. Por favor, permita o acesso ao microfone nas configurações do navegador.');
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        setRecordingError('Nenhum microfone foi encontrado. Por favor, conecte um microfone ao seu dispositivo.');
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        setRecordingError('O microfone está sendo usado por outro aplicativo. Por favor, feche outros aplicativos que possam estar usando o microfone.');
+      }
     }
   };
 
   // Função para parar gravação
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+        console.log('Parando gravação...');
+      } catch (error) {
+        console.error('Erro ao parar gravação:', error);
+        setRecordingError('Erro ao parar gravação');
+      }
       setIsRecording(false);
     }
   };
@@ -159,13 +229,37 @@ function App() {
       return;
     }
 
+    if (audioBlob.size === 0) {
+      setRecordingError('O arquivo de áudio está vazio');
+      return;
+    }
+
     setIsLoading(true);
+    setRecordingError('');
 
     try {
+      // Determinar a extensão correta baseada no tipo MIME
+      let fileExtension = 'webm';
+      const mimeType = audioBlob.type;
+      if (mimeType.includes('ogg')) {
+        fileExtension = 'ogg';
+      } else if (mimeType.includes('mp4')) {
+        fileExtension = 'mp4';
+      } else if (mimeType.includes('wav')) {
+        fileExtension = 'wav';
+      }
+
+      console.log('Enviando áudio para transcrição:', {
+        size: audioBlob.size,
+        type: audioBlob.type,
+        extension: fileExtension
+      });
+
       const formData = new FormData();
-      formData.append('file', audioBlob, 'recording.webm');
+      formData.append('file', audioBlob, `recording.${fileExtension}`);
       formData.append('model', 'whisper-1');
       formData.append('language', 'pt');
+      formData.append('response_format', 'json');
 
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
@@ -181,7 +275,13 @@ function App() {
       }
 
       const data = await response.json();
-      setInputText(data.text);
+      console.log('Transcrição recebida:', data.text);
+
+      if (data.text && data.text.trim()) {
+        setInputText(prevText => prevText ? `${prevText} ${data.text}` : data.text);
+      } else {
+        setRecordingError('Nenhum texto foi reconhecido no áudio');
+      }
     } catch (error) {
       setRecordingError(`Erro na transcrição: ${error.message}`);
       console.error('Erro ao transcrever:', error);
@@ -276,7 +376,8 @@ function App() {
               border: 'none',
               backgroundColor: !isValidKey ? '#ccc' : isRecording ? '#f44336' : '#2196F3',
               color: 'white',
-              cursor: isLoading || !isValidKey ? 'not-allowed' : 'pointer'
+              cursor: isLoading || !isValidKey ? 'not-allowed' : 'pointer',
+              animation: isRecording ? 'pulse 1.5s infinite' : 'none'
             }}
             title={!isValidKey ? 'Insira uma API Key válida para gravar' : ''}
           >
@@ -288,6 +389,66 @@ function App() {
         {recordingError && (
           <div style={{ color: '#f44336', marginBottom: '10px' }}>
             {recordingError}
+          </div>
+        )}
+
+        {/* Preview do áudio gravado */}
+        {audioPreviewUrl && (
+          <div style={{
+            marginTop: '20px',
+            padding: '15px',
+            backgroundColor: 'rgba(255, 255, 255, 0.1)',
+            borderRadius: '10px',
+            width: '100%',
+            maxWidth: '600px'
+          }}>
+            <h3 style={{ fontSize: '18px', marginBottom: '10px' }}>🎵 Áudio Gravado:</h3>
+            <audio
+              controls
+              src={audioPreviewUrl}
+              style={{
+                width: '100%',
+                marginBottom: '10px'
+              }}
+            />
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+              <button
+                onClick={() => {
+                  setAudioPreviewUrl('');
+                  setInputText('');
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  borderRadius: '5px',
+                  border: 'none',
+                  backgroundColor: '#ff9800',
+                  color: 'white',
+                  cursor: 'pointer'
+                }}
+              >
+                🗑️ Descartar
+              </button>
+              <button
+                onClick={() => {
+                  if (audioBlobRef.current) {
+                    transcribeAudio(audioBlobRef.current);
+                  }
+                }}
+                disabled={isLoading}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '14px',
+                  borderRadius: '5px',
+                  border: 'none',
+                  backgroundColor: isLoading ? '#ccc' : '#4CAF50',
+                  color: 'white',
+                  cursor: isLoading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                🔄 Transcrever Novamente
+              </button>
+            </div>
           </div>
         )}
 
