@@ -28,10 +28,10 @@ Criar uma POC funcional **SEM BACKEND** de um professor de matemática IA que:
   npm install recharts mafs
   ```
 
-#### 1.2 Math.js Integration
-- [ ] Criar serviço `mathEngine.js` para todos os cálculos
-- [ ] Implementar parser de expressões matemáticas
-- [ ] Adicionar suporte para:
+#### 1.2 Math.js Integration ✅
+- [x] Criar serviço `mathEngine.js` para todos os cálculos
+- [x] Implementar parser de expressões matemáticas
+- [x] Adicionar suporte para:
   - Aritmética básica e avançada
   - Álgebra simbólica
   - Cálculo diferencial/integral
