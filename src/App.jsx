@@ -25,6 +25,7 @@ function App() {
     if (!key || key.length < 10) {
       setIsValidKey(false);
       setKeyValidationStatus('');
+      localStorage.removeItem('openai_api_key');
       return;
     }
 
@@ -42,19 +43,31 @@ function App() {
       if (response.ok) {
         setIsValidKey(true);
         setKeyValidationStatus('✅ API Key válida');
+        localStorage.setItem('openai_api_key', key);
         setTimeout(() => setKeyValidationStatus(''), 3000);
       } else {
         setIsValidKey(false);
         const error = await response.json();
         setKeyValidationStatus('❌ API Key inválida');
+        localStorage.removeItem('openai_api_key');
         console.error('API Key inválida:', error);
       }
     } catch (error) {
       setIsValidKey(false);
       setKeyValidationStatus('❌ Erro ao validar API Key');
+      localStorage.removeItem('openai_api_key');
       console.error('Erro ao validar API Key:', error);
     }
   };
+
+  // Carregar API Key do localStorage ao iniciar
+  useEffect(() => {
+    const savedApiKey = localStorage.getItem('openai_api_key');
+    if (savedApiKey) {
+      setApiKey(savedApiKey);
+      validateApiKey(savedApiKey);
+    }
+  }, []);
 
   // Validar API Key quando ela mudar
   useEffect(() => {
@@ -394,30 +407,32 @@ function App() {
         <h1>Sofie - ChatGPT Interface</h1>
 
         {/* Input para API Key */}
-        <div style={{ marginBottom: '20px', width: '100%', maxWidth: '600px' }}>
-          <input
-            type="password"
-            placeholder="Insira sua API Key do OpenAI"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '10px',
-              fontSize: '16px',
-              borderRadius: '5px',
-              border: isValidKey ? '2px solid #4CAF50' : '1px solid #ccc'
-            }}
-          />
-          {keyValidationStatus && (
-            <div style={{
-              marginTop: '5px',
-              fontSize: '14px',
-              color: keyValidationStatus.includes('✅') ? '#4CAF50' : keyValidationStatus.includes('❌') ? '#f44336' : '#666'
-            }}>
-              {keyValidationStatus}
-            </div>
-          )}
-        </div>
+        {!isValidKey && (
+          <div style={{ marginBottom: '20px', width: '100%', maxWidth: '600px' }}>
+            <input
+              type="password"
+              placeholder="Insira sua API Key do OpenAI"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                fontSize: '16px',
+                borderRadius: '5px',
+                border: '1px solid #ccc'
+              }}
+            />
+            {keyValidationStatus && (
+              <div style={{
+                marginTop: '5px',
+                fontSize: '14px',
+                color: keyValidationStatus.includes('✅') ? '#4CAF50' : keyValidationStatus.includes('❌') ? '#f44336' : '#666'
+              }}>
+                {keyValidationStatus}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Input de texto principal */}
         <div style={{ marginBottom: '20px', width: '100%', maxWidth: '600px' }}>
