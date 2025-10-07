@@ -18,10 +18,10 @@ Criar uma POC funcional **SEM BACKEND** de um professor de matemática IA que:
 ### 📅 Fase 1: Foundation (Semana 1)
 **Meta:** Transformar o chat atual em um assistente matemático preciso
 
-#### 1.1 Arquitetura e Dependências
+#### 1.1 Arquitetura e Dependências ✅
 - [x] Análise do código existente
-- [ ] Migrar de Create React App para Vite (performance)
-- [ ] Instalar dependências core:
+- [x] Migrar de Create React App para Vite (performance)
+- [x] Instalar dependências core:
   ```bash
   npm install mathjs katex react-katex zustand @tanstack/react-query
   npm install react-markdown remark-math rehype-katex
