@@ -11,8 +11,12 @@ function App() {
   const [isValidKey, setIsValidKey] = useState(false);
   const [keyValidationStatus, setKeyValidationStatus] = useState('');
   const [audioPreviewUrl, setAudioPreviewUrl] = useState('');
+  const [microphoneLevel, setMicrophoneLevel] = useState(0);
 
   const mediaRecorderRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const checkAudioLevelIntervalRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioBlobRef = useRef(null);
 
@@ -121,14 +125,82 @@ function App() {
         throw new Error('Seu navegador não suporta gravação de áudio');
       }
 
-      // Solicitar permissão para usar o microfone
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100
+      // Verificar permissões primeiro
+      try {
+        const permissionStatus = await navigator.permissions.query({ name: 'microphone' });
+        console.log('Status da permissão do microfone:', permissionStatus.state);
+
+        if (permissionStatus.state === 'denied') {
+          throw new Error('Permissão para usar o microfone foi negada. Por favor, permita o acesso ao microfone nas configurações do navegador.');
         }
+      } catch (e) {
+        console.log('Não foi possível verificar permissões (normal em alguns navegadores):', e);
+      }
+
+      // Listar dispositivos de áudio disponíveis
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputDevices = devices.filter(device => device.kind === 'audioinput');
+
+      console.log('Dispositivos de áudio disponíveis:', audioInputDevices);
+
+      // Encontrar o microfone padrão (normalmente o primeiro ou o que tem 'default' no label/id)
+      let defaultMicrophone = audioInputDevices.find(device =>
+        device.deviceId === 'default' ||
+        device.label.toLowerCase().includes('default') ||
+        device.label.toLowerCase().includes('built-in')
+      ) || audioInputDevices[0];
+
+      if (!defaultMicrophone) {
+        throw new Error('Nenhum microfone foi encontrado no sistema');
+      }
+
+      console.log('Usando microfone:', defaultMicrophone.label || defaultMicrophone.deviceId);
+
+      // Configuração de áudio com dispositivo específico
+      const audioConstraints = {
+        deviceId: defaultMicrophone.deviceId ? { exact: defaultMicrophone.deviceId } : undefined,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 44100,
+        channelCount: 1
+      };
+
+      // Solicitar permissão para usar o microfone específico
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: audioConstraints,
+        video: false
       });
+
+      // Verificar se o stream tem trilhas de áudio ativas
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        throw new Error('Nenhuma trilha de áudio foi capturada');
+      }
+
+      console.log('Stream de áudio obtido:', {
+        tracks: audioTracks.length,
+        trackSettings: audioTracks[0].getSettings(),
+        trackLabel: audioTracks[0].label
+      });
+
+      // Criar analisador de áudio para monitorar o nível do microfone
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      const microphone = audioContextRef.current.createMediaStreamSource(stream);
+      microphone.connect(analyserRef.current);
+      analyserRef.current.fftSize = 256;
+
+      // Monitorar níveis de áudio
+      const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+      checkAudioLevelIntervalRef.current = setInterval(() => {
+        analyserRef.current.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        setMicrophoneLevel(average);
+        if (average > 10) {
+          console.log('Nível de áudio detectado:', average);
+        }
+      }, 100);
 
       // Detectar o melhor formato de áudio suportado
       let mimeType = 'audio/webm';
@@ -155,6 +227,8 @@ function App() {
         if (event.data && event.data.size > 0) {
           audioChunksRef.current.push(event.data);
           console.log('Chunk de áudio recebido:', event.data.size, 'bytes');
+        } else {
+          console.warn('Chunk de áudio vazio recebido');
         }
       };
 
@@ -190,9 +264,11 @@ function App() {
       };
 
       // Iniciar gravação com intervalo de tempo para capturar chunks
-      mediaRecorder.start(1000); // Capturar dados a cada 1 segundo
+      mediaRecorder.start(100); // Capturar dados a cada 100ms para melhor responsividade
       setIsRecording(true);
-      console.log('Gravação iniciada');
+      console.log('Gravação iniciada com sucesso!');
+      console.log('MediaRecorder state:', mediaRecorder.state);
+      console.log('Stream ativo:', stream.active);
     } catch (error) {
       setRecordingError(`Erro ao acessar microfone: ${error.message}`);
       console.error('Erro ao iniciar gravação:', error);
@@ -220,6 +296,20 @@ function App() {
       }
       setIsRecording(false);
     }
+
+    // Limpar o monitoramento de áudio
+    if (checkAudioLevelIntervalRef.current) {
+      clearInterval(checkAudioLevelIntervalRef.current);
+      checkAudioLevelIntervalRef.current = null;
+    }
+
+    // Fechar o contexto de áudio
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    setMicrophoneLevel(0);
   };
 
   // Função para transcrever áudio
@@ -384,6 +474,44 @@ function App() {
             {isRecording ? '⏹️ Parar Gravação' : '🎤 Gravar Voz'}
           </button>
         </div>
+
+        {/* Indicador de nível do microfone */}
+        {isRecording && (
+          <div style={{
+            width: '100%',
+            maxWidth: '600px',
+            marginBottom: '10px',
+            padding: '10px',
+            backgroundColor: 'rgba(255, 255, 255, 0.1)',
+            borderRadius: '5px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '14px' }}>📊 Nível do Microfone:</span>
+              <div style={{
+                flex: 1,
+                height: '20px',
+                backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                borderRadius: '10px',
+                overflow: 'hidden'
+              }}>
+                <div style={{
+                  width: `${Math.min(microphoneLevel * 2, 100)}%`,
+                  height: '100%',
+                  backgroundColor: microphoneLevel > 30 ? '#4CAF50' : microphoneLevel > 10 ? '#FFC107' : '#f44336',
+                  transition: 'width 0.1s ease'
+                }} />
+              </div>
+              <span style={{ fontSize: '12px', minWidth: '40px' }}>
+                {Math.round(microphoneLevel)}
+              </span>
+            </div>
+            {microphoneLevel < 5 && (
+              <p style={{ fontSize: '12px', color: '#FFC107', marginTop: '5px' }}>
+                ⚠️ Nível de áudio muito baixo. Fale mais próximo do microfone ou aumente o volume.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Mensagem de erro de gravação */}
         {recordingError && (
